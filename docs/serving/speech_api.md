@@ -183,6 +183,30 @@ response headers:
 | `x-vllm-omni-total-tokens` | `input_tokens` + `output_tokens`. |
 | `x-vllm-omni-input-text-tokens` | Tokens from the synthesized text (`input` plus `instructions`). |
 | `x-vllm-omni-input-audio-tokens` | Reference-audio codec frames, non-zero only for in-context voice cloning. |
+| `x-audio-truncated` | `true` if the audio may end before the text does, `false` if not. Absent if the model does not report it. See [Truncated audio](#truncated-audio). |
+
+#### Truncated audio
+
+Generation can stop at its token budget (`max_new_tokens` or the model's
+context window) before the model ends the speech, so the audio may stop
+mid-sentence. Models that report this set `x-audio-truncated` on non-streaming
+responses and `truncated` on the SSE `speech.audio.done` event:
+
+- `true`: generation stopped at its budget. To get the rest, raise
+  `max_new_tokens` or split the text.
+- `false`: the model ended the speech itself.
+- absent: the model does not report truncation. This does not mean the audio
+  is complete.
+
+Models that report it today: Qwen3-TTS, Breeze-TTS-2, Fish Audio Drama 3 and
+YuE2 (YuE2 on non-streaming responses only, from its own metadata). Qwen3-TTS
+rejects some truncated generations with an error instead (Base task requests,
+and requests whose budget the server sizes from the text), so those never
+return audio.
+
+Raw audio streams (`stream_format="audio"`) send their headers before
+generation ends, and the batch endpoint and WebSocket streaming do not carry the
+flag; use a non-streaming request or the SSE stream to detect truncation.
 
 Diffusion-mode speech servers route through a separate response path and do not
 emit these usage headers. They do report the audio format headers described
@@ -241,6 +265,10 @@ Each event has an `event:` line and a JSON `data:` line:
     Like that header, it is `0.0` when the encoder reports zero frames and is
     absent when no duration is known: empty chunks are skipped before encoding,
     so a stream with no audio reports no duration rather than `0.0`.
+
+    `truncated` extends the OpenAI event for models that report truncation:
+    `true` if generation stopped at its token budget before the model ended
+    the speech. See [Truncated audio](#truncated-audio).
 
 - `speech.audio.error` — emitted instead of `speech.audio.done` if generation fails:
 
